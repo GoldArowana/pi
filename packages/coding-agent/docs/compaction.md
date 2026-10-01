@@ -203,6 +203,10 @@ Default compaction and branch summarization track files cumulatively. Both extra
 
 File tracking therefore accumulates across default compactions and nested default branch summaries. Pi does not automatically carry file lists from extension-generated summaries whose `fromHook` field is `true`; extensions manage their own `details` format.
 
+The appended file lists share an 8192-character budget (about 2048 tokens using Pi's chars/4 estimate), including tags, newlines, and omission notices. Read and modified files each receive half the budget when both lists are large; unused space goes to the other list. Pi keeps whole paths in the existing alphabetical order and reports the number of omitted paths. This estimate is not an exact tokenizer limit. The complete cumulative lists remain in `details`.
+
+When reusing a Pi-generated checkpoint, Pi recognizes its terminal file list by matching it against `details`, including the older unbounded format. Compaction removes that footer from the previous summary and rebuilds it after summarization. Summary entries passed as conversation context retain a bounded footer. Extensions receive these prepared summaries in `preparation.previousSummary`, `preparation.messagesToSummarize`, and `preparation.turnPrefixMessages`; the complete previous entry remains available in `branchEntries`. This also prevents duplicate footers when a split user-message span directly carries the previous summary forward. Stored entries are not rewritten; extension summaries, unmatched lists, and file references in narrative text are left unchanged. Lists already embedded in narrative by older summaries are not removed.
+
 ### BranchSummaryEntry Structure
 
 Defined in [`session-manager.ts`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/session-manager.ts):

@@ -18,6 +18,7 @@ import {
 import type { ReadonlySessionManager, SessionEntry } from "../session-manager.ts";
 import { completeSummarization, estimateTokens, getSummarizationFailure } from "./compaction.ts";
 import {
+	boundSummaryFileOperations,
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
@@ -164,10 +165,10 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 			return createCustomMessage(entry.customType, entry.content, entry.display, entry.details, entry.timestamp);
 
 		case "branch_summary":
-			return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+			return createBranchSummaryMessage(boundSummaryFileOperations(entry), entry.fromId, entry.timestamp);
 
 		case "compaction":
-			return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
+			return createCompactionSummaryMessage(boundSummaryFileOperations(entry), entry.tokensBefore, entry.timestamp);
 
 		// These don't contribute to conversation content
 		case "thinking_level_change":

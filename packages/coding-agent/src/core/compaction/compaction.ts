@@ -35,6 +35,7 @@ import {
 } from "../session-manager.ts";
 import { combineUsage } from "../usage-totals.ts";
 import {
+	boundSummaryFileOperations,
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
@@ -42,6 +43,7 @@ import {
 	formatFileOperations,
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
+	stripFileOperations,
 } from "./utils.ts";
 
 // ============================================================================
@@ -98,7 +100,13 @@ function extractFileOperations(
 function getMessagesFromProjectedEntryForCompaction(entry: ProjectedSessionEntry): AgentMessage[] {
 	if (entry.sourceEntry.type === "compaction") return [];
 	// System messages are prompt state, not conversation; the compaction entry carries their replay.
-	return entry.messages.filter((message) => message.role !== "system");
+	return entry.messages
+		.filter((message) => message.role !== "system")
+		.map((message) =>
+			message.role === "branchSummary" && entry.sourceEntry.type === "branch_summary"
+				? { ...message, summary: boundSummaryFileOperations(entry.sourceEntry) }
+				: message,
+		);
 }
 
 /** Result from compact() - SessionManager adds uuid/parentUuid when saving */
@@ -889,7 +897,9 @@ export function prepareCompaction(
 	let previousSummary: string | undefined;
 	let boundaryStart = 0;
 	if (prevCompactionIndex >= 0) {
-		previousSummary = (projectedEntries[prevCompactionIndex].sourceEntry as CompactionEntry).summary;
+		// Rebuild the file list from details after summarization, including when a split turn
+		// carries the previous summary forward without another history-summary request.
+		previousSummary = stripFileOperations(projectedEntries[prevCompactionIndex].sourceEntry as CompactionEntry);
 		// The canonical projection has already selected the previous compaction's retained tail.
 		boundaryStart = prevCompactionIndex + 1;
 	}

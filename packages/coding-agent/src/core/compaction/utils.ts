@@ -4,6 +4,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { contentText, type Message } from "@earendil-works/pi-ai";
+import type { BranchSummaryEntry, CompactionEntry } from "../session-manager.ts";
 
 // ============================================================================
 // File Operation Tracking
@@ -71,19 +72,71 @@ export function computeFileLists(fileOps: FileOperations): { readFiles: string[]
 	return { readFiles: readOnly, modifiedFiles };
 }
 
-/**
- * Format file operations as XML tags for summary.
- */
+// About 2048 tokens using the same chars/4 estimate as compaction. Includes tags and omission notices.
+const FILE_LIST_MAX_CHARS = 2048 * 4;
+
+function formatFileList(tag: string, files: string[], maxChars = Number.POSITIVE_INFINITY): string {
+	if (files.length === 0) return "";
+	let text = `\n\n<${tag}>\n`;
+	const end = `</${tag}>`;
+	let kept = 0;
+	for (const file of files) {
+		const remaining = files.length - kept - 1;
+		const notice = remaining > 0 ? `[... ${remaining} more files omitted]\n` : "";
+		if (text.length + file.length + 1 + notice.length + end.length > maxChars) break;
+		text += `${file}\n`;
+		kept++;
+	}
+	if (kept < files.length) text += `[... ${files.length - kept} more files omitted]\n`;
+	return text + end;
+}
+
+/** Format a bounded file list without changing the complete lists stored in details. */
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-	const sections: string[] = [];
-	if (readFiles.length > 0) {
-		sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+	const read = formatFileList("read-files", readFiles);
+	const modified = formatFileList("modified-files", modifiedFiles);
+	if (read.length + modified.length <= FILE_LIST_MAX_CHARS) return read + modified;
+
+	// Share the budget between categories; a small category leaves its unused space to the other.
+	const readBudget = Math.max(FILE_LIST_MAX_CHARS - modified.length, Math.floor(FILE_LIST_MAX_CHARS / 2));
+	const modifiedBudget = FILE_LIST_MAX_CHARS - Math.min(read.length, readBudget);
+	return (
+		(read.length <= readBudget ? read : formatFileList("read-files", readFiles, readBudget)) +
+		(modified.length <= modifiedBudget ? modified : formatFileList("modified-files", modifiedFiles, modifiedBudget))
+	);
+}
+
+/**
+ * Remove only the terminal file list verified against a Pi-generated entry's details.
+ * Narrative references, extension summaries, and unrecognized suffixes are left intact.
+ */
+export function stripFileOperations(entry: CompactionEntry | BranchSummaryEntry): string {
+	if (entry.fromHook || !entry.details || typeof entry.details !== "object") return entry.summary;
+	const { readFiles, modifiedFiles } = entry.details as { readFiles?: unknown; modifiedFiles?: unknown };
+	if (
+		!Array.isArray(readFiles) ||
+		!readFiles.every((file): file is string => typeof file === "string") ||
+		!Array.isArray(modifiedFiles) ||
+		!modifiedFiles.every((file): file is string => typeof file === "string")
+	) {
+		return entry.summary;
 	}
-	if (modifiedFiles.length > 0) {
-		sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+
+	// Older checkpoints contain the full list. New checkpoints contain the bounded rendering.
+	const bounded = formatFileOperations(readFiles, modifiedFiles);
+	const full = formatFileList("read-files", readFiles) + formatFileList("modified-files", modifiedFiles);
+	for (const suffix of [full, bounded]) {
+		if (suffix && entry.summary.endsWith(suffix)) return entry.summary.slice(0, -suffix.length);
 	}
-	if (sections.length === 0) return "";
-	return `\n\n${sections.join("\n\n")}`;
+	return entry.summary;
+}
+
+/** Bound file lists in summary messages without discarding their file context. */
+export function boundSummaryFileOperations(entry: CompactionEntry | BranchSummaryEntry): string {
+	const text = stripFileOperations(entry);
+	if (text === entry.summary) return text;
+	const { readFiles, modifiedFiles } = entry.details as { readFiles: string[]; modifiedFiles: string[] };
+	return text + formatFileOperations(readFiles, modifiedFiles);
 }
 
 // ============================================================================
